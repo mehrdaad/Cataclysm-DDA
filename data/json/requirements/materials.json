@@ -39,7 +39,13 @@
     "id": "copper_scrap_equivalent",
     "type": "requirement",
     "//": "Material used for equivalence between one unit of scrap copper and corresponding amount of elemental copper.",
-    "components": [ [ [ "scrap_copper", 1 ], [ "copper", 25 ] ] ]
+    "components": [ [ [ "scrap_copper", 1 ], [ "copper", 50 ] ] ]
+  },
+  {
+    "id": "plant_cordage",
+    "type": "requirement",
+    "//": "Fibrous plant material for basket weaving or rope making.",
+    "components": [ [ [ "withered", 2 ], [ "straw_pile", 2 ], [ "tanbark", 1 ], [ "willowbark", 1 ], [ "birchbark", 1 ] ] ]
   },
   {
     "id": "cordage",

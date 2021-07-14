@@ -4,8 +4,10 @@
 #include <limits>
 #include <list>
 #include <memory>
+#include <string>
 
 #include "avatar.h"
+#include "bodypart.h"
 #include "calendar.h"
 #include "character.h"
 #include "creature.h"
@@ -13,7 +15,6 @@
 #include "game.h"
 #include "generic_factory.h"
 #include "gun_mode.h"
-#include "int_id.h"
 #include "item.h"
 #include "item_pocket.h"
 #include "json.h"
@@ -38,20 +39,11 @@ static const efftype_id effect_infected( "infected" );
 static const efftype_id effect_laserlocked( "laserlocked" );
 static const efftype_id effect_poison( "poison" );
 static const efftype_id effect_stunned( "stunned" );
+static const efftype_id effect_sensor_stun( "sensor_stun" );
 static const efftype_id effect_targeted( "targeted" );
 static const efftype_id effect_was_laserlocked( "was_laserlocked" );
 
 static const trait_id trait_TOXICFLESH( "TOXICFLESH" );
-
-// Simplified version of the function in monattack.cpp
-static bool is_adjacent( const monster &z, const Creature &target )
-{
-    if( rl_dist( z.pos(), target.pos() ) != 1 ) {
-        return false;
-    }
-
-    return z.posz() == target.posz();
-}
 
 void leap_actor::load_internal( const JsonObject &obj, const std::string & )
 {
@@ -163,18 +155,12 @@ std::unique_ptr<mattack_actor> mon_spellcasting_actor::clone() const
 
 void mon_spellcasting_actor::load_internal( const JsonObject &obj, const std::string & )
 {
-    std::string sp_id;
-    fake_spell intermediate;
-    mandatory( obj, was_loaded, "spell_data", intermediate );
-    self = intermediate.self;
+    mandatory( obj, was_loaded, "spell_data", spell_data );
     translation monster_message;
     optional( obj, was_loaded, "monster_message", monster_message,
               //~ "<Monster Display name> cast <Spell Name> on <Target name>!"
               to_translation( "%1$s casts %2$s at %3$s!" ) );
-    spell_data = intermediate.get_spell();
-    spell_data.set_message( monster_message );
-    avatar fake_player;
-    move_cost = spell_data.casting_time( fake_player, true );
+    spell_data.trigger_message = monster_message;
 }
 
 bool mon_spellcasting_actor::call( monster &mon ) const
@@ -188,15 +174,12 @@ bool mon_spellcasting_actor::call( monster &mon ) const
         return false;
     }
 
-    const tripoint target = mon.attack_target()->pos();
+    const tripoint target = spell_data.self ? mon.pos() : mon.attack_target()->pos();
+    spell spell_instance = spell_data.get_spell();
+    spell_instance.set_message( spell_data.trigger_message );
 
-    std::string fx = spell_data.effect();
-    // is the spell an attack that needs to hit the target?
-    // examples of spells that don't: summons, teleport self
-    const bool targeted_attack = fx == "target_attack" || fx == "projectile_attack" ||
-                                 fx == "cone_attack" || fx == "line_attack";
-
-    if( targeted_attack && rl_dist( mon.pos(), target ) > spell_data.range() ) {
+    // Bail out if the target is out of range.
+    if( !spell_data.self && rl_dist( mon.pos(), target ) > spell_instance.range() ) {
         return false;
     }
 
@@ -205,10 +188,12 @@ bool mon_spellcasting_actor::call( monster &mon ) const
         target_name = target_monster->disp_name();
     }
 
-    add_msg_if_player_sees( target, spell_data.message(), mon.disp_name(),
-                            spell_data.name(), target_name );
+    add_msg_if_player_sees( target, spell_instance.message(), mon.disp_name(),
+                            spell_instance.name(), target_name );
 
-    spell_data.cast_all_effects( mon, target );
+    avatar fake_player;
+    mon.moves -= spell_instance.casting_time( fake_player, true );
+    spell_instance.cast_all_effects( mon, target );
 
     return true;
 }
@@ -230,10 +215,15 @@ void melee_actor::load_internal( const JsonObject &obj, const std::string & )
         damage_max_instance = load_damage_instance( obj );
     }
 
-    min_mul = obj.get_float( "min_mul", 0.0f );
-    max_mul = obj.get_float( "max_mul", 1.0f );
-    move_cost = obj.get_int( "move_cost", 100 );
-    accuracy = obj.get_int( "accuracy", INT_MIN );
+    optional( obj, was_loaded, "attack_chance", attack_chance, 100 );
+    optional( obj, was_loaded, "accuracy", accuracy, INT_MIN );
+    optional( obj, was_loaded, "min_mul", min_mul, 0.5f );
+    optional( obj, was_loaded, "max_mul", max_mul, 1.0f );
+    optional( obj, was_loaded, "move_cost", move_cost, 100 );
+    optional( obj, was_loaded, "range", range, 1 );
+    optional( obj, was_loaded, "no_adjacent", no_adjacent, false );
+    optional( obj, was_loaded, "dodgeable", dodgeable, true );
+    optional( obj, was_loaded, "blockable", blockable, true );
 
     optional( obj, was_loaded, "miss_msg_u", miss_msg_u,
               to_translation( "The %s lunges at you, but you dodge!" ) );
@@ -270,7 +260,18 @@ Creature *melee_actor::find_target( monster &z ) const
     }
 
     Creature *target = z.attack_target();
-    if( target == nullptr || !is_adjacent( z, *target ) ) {
+
+    if( target == nullptr || ( no_adjacent && z.is_adjacent( target, false ) ) ) {
+        return nullptr;
+    }
+
+    if( range > 1 ) {
+        if( !z.sees( *target ) ||
+            !get_map().clear_path( z.pos(), target->pos(), range, 1, 200 ) ) {
+            return nullptr;
+        }
+
+    } else if( !z.is_adjacent( target, false ) ) {
         return nullptr;
     }
 
@@ -279,6 +280,10 @@ Creature *melee_actor::find_target( monster &z ) const
 
 bool melee_actor::call( monster &z ) const
 {
+    if( attack_chance != 100 && !x_in_y( attack_chance, 100 ) ) {
+        return false;
+    }
+
     Creature *target = find_target( z );
     if( target == nullptr ) {
         return false;
@@ -286,42 +291,55 @@ bool melee_actor::call( monster &z ) const
 
     z.mod_moves( -move_cost );
 
-    add_msg_debug( "%s attempting to melee_attack %s", z.name(),
+    add_msg_debug( debugmode::DF_MATTACK, "%s attempting to melee_attack %s", z.name(),
                    target->disp_name() );
 
+    // Dodge check
     const int acc = accuracy >= 0 ? accuracy : z.type->melee_skill;
     int hitspread = target->deal_melee_attack( &z, dice( acc, 10 ) );
-
-    if( hitspread < 0 ) {
-        auto msg_type = target->is_avatar() ? m_warning : m_info;
-        sfx::play_variant_sound( "mon_bite", "bite_miss", sfx::get_heard_volume( z.pos() ),
-                                 sfx::get_heard_angle( z.pos() ) );
-        target->add_msg_player_or_npc( msg_type, miss_msg_u, miss_msg_npc, z.name() );
-        return true;
+    if( dodgeable ) {
+        if( hitspread < 0 ) {
+            game_message_type msg_type = target->is_avatar() ? m_warning : m_info;
+            sfx::play_variant_sound( "mon_bite", "bite_miss", sfx::get_heard_volume( z.pos() ),
+                                     sfx::get_heard_angle( z.pos() ) );
+            target->add_msg_player_or_npc( msg_type, miss_msg_u, miss_msg_npc, z.name() );
+            return true;
+        }
     }
 
+    // Damage instance calculation
     damage_instance damage = damage_max_instance;
-
     double multiplier = rng_float( min_mul, max_mul );
     damage.mult_damage( multiplier );
 
+    // Pick body part
     bodypart_str_id bp_hit = body_parts.empty() ?
                              target->select_body_part( &z, hitspread ).id() :
                              *body_parts.pick();
 
-    target->on_hit( &z, bp_hit.id() );
-    dealt_damage_instance dealt_damage = target->deal_damage( &z, bp_hit.id(), damage );
-    dealt_damage.bp_hit = bp_hit.id();
+    bodypart_id bp_id = bodypart_id( bp_hit );
+
+    // Block our hit
+    if( blockable ) {
+        target->block_hit( &z, bp_id, damage );
+    }
+
+    // Take damage
+    dealt_damage_instance dealt_damage = target->deal_damage( &z, bp_id, damage );
+    dealt_damage.bp_hit = bp_id;
+
+    // On hit effects
+    target->on_hit( &z, bp_id );
 
     int damage_total = dealt_damage.total_damage();
-    add_msg_debug( "%s's melee_attack did %d damage", z.name(), damage_total );
+    add_msg_debug( debugmode::DF_MATTACK, "%s's melee_attack did %d damage", z.name(), damage_total );
     if( damage_total > 0 ) {
         on_damage( z, *target, dealt_damage );
     } else {
         sfx::play_variant_sound( "mon_bite", "bite_miss", sfx::get_heard_volume( z.pos() ),
                                  sfx::get_heard_angle( z.pos() ) );
         target->add_msg_player_or_npc( m_neutral, no_dmg_msg_u, no_dmg_msg_npc, z.name(),
-                                       body_part_name_accusative( bp_hit.id() ) );
+                                       body_part_name_accusative( bp_id ) );
     }
 
     return true;
@@ -334,8 +352,9 @@ void melee_actor::on_damage( monster &z, Creature &target, dealt_damage_instance
                                  sfx::get_heard_angle( z.pos() ) );
         sfx::do_player_death_hurt( dynamic_cast<player &>( target ), false );
     }
-    auto msg_type = target.attitude_to( get_player_character() ) == Creature::Attitude::FRIENDLY ?
-                    m_bad : m_neutral;
+    game_message_type msg_type = target.attitude_to( get_player_character() ) ==
+                                 Creature::Attitude::FRIENDLY ?
+                                 m_bad : m_neutral;
     const bodypart_id &bp = dealt.bp_hit ;
     target.add_msg_player_or_npc( msg_type, hit_dmg_u, hit_dmg_npc, z.name(),
                                   body_part_name_accusative( bp ) );
@@ -440,7 +459,7 @@ void gun_actor::load_internal( const JsonObject &obj, const std::string & )
 
     obj.read( "targeting_volume", targeting_volume );
 
-    obj.get_bool( "laser_lock", laser_lock );
+    laser_lock = obj.get_bool( "laser_lock", false );
 
     obj.read( "require_sunlight", require_sunlight );
 }
@@ -515,8 +534,8 @@ void gun_actor::shoot( monster &z, Creature &target, const gun_mode_id &mode ) c
             z.add_effect( effect_targeted, time_duration::from_turns( targeting_timeout ) );
         }
         if( not_laser_locked ) {
-            target.add_effect( effect_laserlocked, 5_turns );
-            target.add_effect( effect_was_laserlocked, 5_turns );
+            target.add_effect( effect_laserlocked, time_duration::from_turns( targeting_timeout ) );
+            target.add_effect( effect_was_laserlocked, time_duration::from_turns( targeting_timeout ) );
             target.add_msg_if_player( m_warning,
                                       _( "You're not sure why you've got a laser dot on you…" ) );
         }
@@ -530,12 +549,15 @@ void gun_actor::shoot( monster &z, Creature &target, const gun_mode_id &mode ) c
     item gun( gun_type );
     gun.gun_set_mode( mode );
 
-    itype_id ammo;
-    if( gun.magazine_integral() ) {
-        ammo = gun.ammo_default();
-    } else {
-        ammo = item( gun.magazine_default() ).ammo_default();
+    itype_id ammo = ammo_type;
+    if( ammo.is_null() ) {
+        if( gun.magazine_integral() ) {
+            ammo = gun.ammo_default();
+        } else {
+            ammo = item( gun.magazine_default() ).ammo_default();
+        }
     }
+
     if( !ammo.is_null() ) {
         if( gun.magazine_integral() ) {
             gun.ammo_set( ammo, z.ammo[ammo] );
@@ -546,7 +568,7 @@ void gun_actor::shoot( monster &z, Creature &target, const gun_mode_id &mode ) c
         }
     }
 
-    if( z.has_effect( effect_stunned ) ) {
+    if( z.has_effect( effect_stunned ) || z.has_effect( effect_sensor_stun ) ) {
         return;
     }
 
@@ -559,7 +581,7 @@ void gun_actor::shoot( monster &z, Creature &target, const gun_mode_id &mode ) c
 
     standard_npc tmp( _( "The " ) + z.name(), z.pos(), {}, 8,
                       fake_str, fake_dex, fake_int, fake_per );
-    tmp.worn.push_back( item( "backpack" ) );
+    tmp.worn.emplace_back( "backpack" );
     tmp.set_fake( true );
     tmp.set_attitude( z.friendly ? NPCATT_FOLLOW : NPCATT_KILL );
     tmp.recoil = 0; // no need to aim

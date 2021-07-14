@@ -2,6 +2,7 @@
   {
     "result": "spaghetti_cooked",
     "type": "recipe",
+    "activity_level": "NO_EXERCISE",
     "category": "CC_FOOD",
     "subcategory": "CSC_FOOD_PASTA",
     "skill_used": "cooking",
@@ -17,6 +18,7 @@
   {
     "result": "macaroni_cooked",
     "type": "recipe",
+    "activity_level": "NO_EXERCISE",
     "category": "CC_FOOD",
     "subcategory": "CSC_FOOD_PASTA",
     "skill_used": "cooking",
@@ -34,6 +36,7 @@
   {
     "result": "spaghetti_bolognese",
     "type": "recipe",
+    "activity_level": "LIGHT_EXERCISE",
     "category": "CC_FOOD",
     "subcategory": "CSC_FOOD_PASTA",
     "skill_used": "cooking",
@@ -60,6 +63,7 @@
   {
     "result": "lasagne",
     "type": "recipe",
+    "activity_level": "LIGHT_EXERCISE",
     "category": "CC_FOOD",
     "subcategory": "CSC_FOOD_PASTA",
     "skill_used": "cooking",
@@ -87,6 +91,7 @@
   {
     "result": "spaghetti_pesto",
     "type": "recipe",
+    "activity_level": "LIGHT_EXERCISE",
     "category": "CC_FOOD",
     "subcategory": "CSC_FOOD_PASTA",
     "skill_used": "cooking",
@@ -107,7 +112,9 @@
         [ "veggy", 2 ],
         [ "veggy_wild", 2 ],
         [ "rehydrated_veggy", 2 ],
+        [ "rehydrated_corn_kernels", 2 ],
         [ "dry_veggy", 2 ],
+        [ "dry_corn", 2 ],
         [ "mushroom", 2 ],
         [ "mushroom_cooked", 2 ],
         [ "morel_cooked", 2 ],
@@ -118,6 +125,7 @@
   {
     "result": "noodles_fast",
     "type": "recipe",
+    "activity_level": "LIGHT_EXERCISE",
     "category": "CC_FOOD",
     "subcategory": "CSC_FOOD_PASTA",
     "skill_used": "cooking",
@@ -130,6 +138,7 @@
   {
     "result": "spaghetti_raw",
     "type": "recipe",
+    "activity_level": "LIGHT_EXERCISE",
     "category": "CC_FOOD",
     "subcategory": "CSC_FOOD_PASTA",
     "skill_used": "cooking",
@@ -142,6 +151,7 @@
   {
     "result": "lasagne_raw",
     "type": "recipe",
+    "activity_level": "LIGHT_EXERCISE",
     "category": "CC_FOOD",
     "subcategory": "CSC_FOOD_PASTA",
     "skill_used": "cooking",
@@ -154,6 +164,7 @@
   {
     "result": "macaroni_raw",
     "type": "recipe",
+    "activity_level": "LIGHT_EXERCISE",
     "category": "CC_FOOD",
     "subcategory": "CSC_FOOD_PASTA",
     "skill_used": "cooking",
@@ -166,6 +177,7 @@
   {
     "result": "macaroni_helper",
     "type": "recipe",
+    "activity_level": "LIGHT_EXERCISE",
     "category": "CC_FOOD",
     "subcategory": "CSC_FOOD_PASTA",
     "skill_used": "cooking",

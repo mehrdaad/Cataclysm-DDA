@@ -1,9 +1,7 @@
-#include "catch/catch.hpp"
-
-#include "monster.h"
-
+#include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <memory>
 #include <sstream>
@@ -11,16 +9,23 @@
 #include <utility>
 #include <vector>
 
+#include "cata_utility.h"
+#include "cata_catch.h"
 #include "character.h"
 #include "game.h"
 #include "game_constants.h"
 #include "line.h"
 #include "map.h"
 #include "map_helpers.h"
+#include "monster.h"
+#include "monstergenerator.h"
+#include "mtype.h"
+#include "optional.h"
 #include "options.h"
 #include "options_helpers.h"
 #include "point.h"
 #include "test_statistics.h"
+#include "type_id.h"
 
 class item;
 
@@ -237,7 +242,7 @@ static void test_moves_to_squares( const std::string &monster_type, const bool w
     }
     for( auto &stat_pair : turns_at_angle ) {
         std::stringstream sample_string;
-        for( auto sample : stat_pair.second.get_samples() ) {
+        for( int sample : stat_pair.second.get_samples() ) {
             sample_string << sample << ", ";
         }
         INFO( "Monster:" << monster_type << " Angle: " << stat_pair.first <<
@@ -299,6 +304,7 @@ static void monster_check()
 TEST_CASE( "write_slope_to_speed_map_trig", "[.]" )
 {
     clear_map_and_put_player_underground();
+    restore_on_out_of_scope<bool> restore_trigdist( trigdist );
     override_option opt( "CIRCLEDIST", "true" );
     trigdist = true;
     test_moves_to_squares( "mon_zombie_dog", true );
@@ -308,6 +314,7 @@ TEST_CASE( "write_slope_to_speed_map_trig", "[.]" )
 TEST_CASE( "write_slope_to_speed_map_square", "[.]" )
 {
     clear_map_and_put_player_underground();
+    restore_on_out_of_scope<bool> restore_trigdist( trigdist );
     override_option opt( "CIRCLEDIST", "false" );
     trigdist = false;
     test_moves_to_squares( "mon_zombie_dog", true );
@@ -319,6 +326,7 @@ TEST_CASE( "write_slope_to_speed_map_square", "[.]" )
 TEST_CASE( "monster_speed_square", "[speed]" )
 {
     clear_map_and_put_player_underground();
+    restore_on_out_of_scope<bool> restore_trigdist( trigdist );
     override_option opt( "CIRCLEDIST", "false" );
     trigdist = false;
     monster_check();
@@ -327,7 +335,46 @@ TEST_CASE( "monster_speed_square", "[speed]" )
 TEST_CASE( "monster_speed_trig", "[speed]" )
 {
     clear_map_and_put_player_underground();
+    restore_on_out_of_scope<bool> restore_trigdist( trigdist );
     override_option opt( "CIRCLEDIST", "true" );
     trigdist = true;
     monster_check();
+}
+
+TEST_CASE( "monster_extend_flags", "[monster]" )
+{
+    // mon_dog_zombie_brute is copy-from mon_dog_zombie_rot
+    // mon_dog_zombie_rot contains
+    // "flags": [ "SEES", "HEARS", "SMELLS", "STUMBLES", "WARM", "BASHES", "POISON", "NO_BREATHE", "REVIVES", "PUSH_MON", "FILTHY" ]
+    // mon_dog_zombie_brute contains
+    // "extend": { "flags": [ "GROUP_BASH", "PUSH_VEH" ] }
+
+    // This test verifies that "extend" works on monster flags by checking both
+    // those take effect
+    const mtype &m = *mtype_id( "mon_dog_zombie_brute" );
+    CHECK( m.has_flag( MF_SEES ) );
+    CHECK( m.has_flag( MF_PUSH_VEH ) );
+}
+
+TEST_CASE( "monster_broken_verify", "[monster]" )
+{
+    // verify monsters with death_function = BROKEN
+    // actually have appropriate broken_name items
+    const MonsterGenerator &generator = MonsterGenerator::generator();
+    for( const mtype &montype : generator.get_all_mtypes() ) {
+        if( montype.mdeath_effect.corpse_type != mdeath_type::BROKEN ) {
+            continue;
+        }
+
+        // this contraption should match mdeath::broken in mondeath.cpp
+        std::string broken_id_str = montype.id.str();
+        if( broken_id_str.compare( 0, 4, "mon_" ) == 0 ) {
+            broken_id_str.erase( 0, 4 );
+        }
+        broken_id_str.insert( 0, "broken_" ); // "broken_manhack", or "broken_eyebot", ...
+        const itype_id targetitemid( broken_id_str );
+
+        CAPTURE( montype.id.c_str() );
+        CHECK( targetitemid.is_valid() );
+    }
 }

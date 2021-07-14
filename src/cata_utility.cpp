@@ -1,12 +1,13 @@
 #include "cata_utility.h"
 
-#include <algorithm>
 #include <cctype>
+#include <clocale>
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <exception>
+#include <fstream>
 #include <iterator>
-#include <locale>
-#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -213,6 +214,11 @@ double temp_to_kelvin( double fahrenheit )
     return temp_to_celsius( fahrenheit ) + 273.15;
 }
 
+double celsius_to_kelvin( double celsius )
+{
+    return celsius + 273.15;
+}
+
 double kelvin_to_fahrenheit( double kelvin )
 {
     return 1.8 * ( kelvin - 273.15 ) + 32;
@@ -360,8 +366,8 @@ bool read_from_file( const std::string &path, const std::function<void( std::ist
 
 bool read_from_file_json( const std::string &path, const std::function<void( JsonIn & )> &reader )
 {
-    return read_from_file( path, [&reader]( std::istream & fin ) {
-        JsonIn jsin( fin );
+    return read_from_file( path, [&]( std::istream & fin ) {
+        JsonIn jsin( fin, path );
         reader( jsin );
     } );
 }
@@ -385,8 +391,8 @@ bool read_from_file_optional( const std::string &path,
 bool read_from_file_optional_json( const std::string &path,
                                    const std::function<void( JsonIn & )> &reader )
 {
-    return read_from_file_optional( path, [&reader]( std::istream & fin ) {
-        JsonIn jsin( fin );
+    return read_from_file_optional( path, [&]( std::istream & fin ) {
+        JsonIn jsin( fin, path );
         reader( jsin );
     } );
 }

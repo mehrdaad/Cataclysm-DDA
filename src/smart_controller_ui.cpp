@@ -1,6 +1,8 @@
 #include "smart_controller_ui.h"
 
 #include <algorithm>
+#include <functional>
+#include <iosfwd>
 #include <string>
 #include <vector>
 
@@ -15,7 +17,6 @@
 #include "text_snippets.h"
 #include "translations.h"
 #include "ui_manager.h"
-
 
 static catacurses::window init_window()
 {

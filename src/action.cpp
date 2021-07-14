@@ -5,16 +5,21 @@
 #include <istream>
 #include <iterator>
 #include <memory>
+#include <new>
+#include <string>
 #include <utility>
 
 #include "avatar.h"
+#include "cached_options.h"
 #include "cata_utility.h"
 #include "character.h"
+#include "colony.h"
 #include "creature.h"
 #include "debug.h"
+#include "flag.h"
 #include "game.h"
-#include "iexamine.h"
 #include "input.h"
+#include "inventory.h"
 #include "item.h"
 #include "map.h"
 #include "map_iterator.h"
@@ -39,16 +44,12 @@ static const quality_id qual_BUTCHER( "BUTCHER" );
 static const quality_id qual_CUT_FINE( "CUT_FINE" );
 
 static const std::string flag_CONSOLE( "CONSOLE" );
-static const std::string flag_FLOTATION( "FLOTATION" );
 static const std::string flag_GOES_DOWN( "GOES_DOWN" );
 static const std::string flag_GOES_UP( "GOES_UP" );
-static const std::string flag_REACH_ATTACK( "REACH_ATTACK" );
 static const std::string flag_SWIMMABLE( "SWIMMABLE" );
 
-class inventory;
-
-void parse_keymap( std::istream &keymap_txt, std::map<char, action_id> &kmap,
-                   std::set<action_id> &unbound_keymap );
+static void parse_keymap( std::istream &keymap_txt, std::map<char, action_id> &kmap,
+                          std::set<action_id> &unbound_keymap );
 
 void load_keyboard_settings( std::map<char, action_id> &keymap,
                              std::string &keymap_file_loaded_from,
@@ -68,8 +69,8 @@ void parse_keymap( std::istream &keymap_txt, std::map<char, action_id> &kmap,
     while( !keymap_txt.eof() ) {
         std::string id;
         keymap_txt >> id;
-        if( id.empty() ) {
-            // Empty line, chomp it
+        if( id.empty() || id[0] == '#' ) {
+            // Empty line or comment, chomp it
             getline( keymap_txt, id );
         } else if( id == "unbind" ) {
             keymap_txt >> id;
@@ -78,7 +79,7 @@ void parse_keymap( std::istream &keymap_txt, std::map<char, action_id> &kmap,
                 unbound_keymap.insert( act );
             }
             break;
-        } else if( id[0] != '#' ) {
+        } else {
             const action_id act = look_up_action( id );
             if( act == ACTION_NULL ) {
                 debugmsg( "Warning!  keymap.txt contains an unknown action, \"%s\"\n"
@@ -100,17 +101,17 @@ void parse_keymap( std::istream &keymap_txt, std::map<char, action_id> &kmap,
                     }
                 }
             }
-        } else {
-            // Clear the whole line
-            getline( keymap_txt, id );
         }
     }
 }
 
-std::vector<char> keys_bound_to( action_id act, const bool restrict_to_printable )
+std::vector<input_event> keys_bound_to( const action_id act,
+                                        const int maximum_modifier_count,
+                                        const bool restrict_to_printable )
 {
     input_context ctxt = get_default_mode_input_context();
-    return ctxt.keys_bound_to( action_ident( act ), restrict_to_printable );
+    return ctxt.keys_bound_to( action_ident( act ), maximum_modifier_count,
+                               restrict_to_printable );
 }
 
 std::string action_ident( action_id act )
@@ -324,10 +325,18 @@ std::string action_ident( action_id act )
             return "debug_vehicle_ai";
         case ACTION_DISPLAY_VISIBILITY:
             return "debug_visibility";
+        case ACTION_DISPLAY_TRANSPARENCY:
+            return "debug_transparency";
+        case ACTION_DISPLAY_REACHABILITY_ZONES:
+            return "display_reachability_zones";
         case ACTION_DISPLAY_LIGHTING:
             return "debug_lighting";
         case ACTION_DISPLAY_RADIATION:
             return "debug_radiation";
+        case ACTION_DISPLAY_NPC_ATTACK_POTENTIAL:
+            return "debug_npc_attack_potential";
+        case ACTION_TOGGLE_HOUR_TIMER:
+            return "debug_hour_timer";
         case ACTION_TOGGLE_DEBUG_MODE:
             return "debug_mode";
         case ACTION_ZOOM_OUT:
@@ -438,6 +447,9 @@ bool can_action_change_worldstate( const action_id act )
         case ACTION_DISPLAY_VISIBILITY:
         case ACTION_DISPLAY_LIGHTING:
         case ACTION_DISPLAY_RADIATION:
+        case ACTION_DISPLAY_NPC_ATTACK_POTENTIAL:
+        case ACTION_DISPLAY_TRANSPARENCY:
+        case ACTION_DISPLAY_REACHABILITY_ZONES:
         case ACTION_ZOOM_OUT:
         case ACTION_ZOOM_IN:
         case ACTION_TOGGLE_PIXEL_MINIMAP:
@@ -510,7 +522,8 @@ cata::optional<std::string> press_x_if_bound( action_id act )
 {
     input_context ctxt = get_default_mode_input_context();
     std::string description = action_ident( act );
-    if( ctxt.keys_bound_to( description ).empty() ) {
+    if( ctxt.keys_bound_to( description, /*maximum_modifier_count=*/ -1,
+                            /*restrict_to_printable=*/false ).empty() ) {
         return cata::nullopt;
     }
     return press_x( act );
@@ -569,14 +582,17 @@ point get_delta_from_movement_action( const action_id act, const iso_rotate rot 
     }
 }
 
-int hotkey_for_action( action_id action, const bool restrict_to_printable )
+cata::optional<input_event> hotkey_for_action( const action_id action,
+        const int maximum_modifier_count, const bool restrict_to_printable )
 {
-    auto is_valid_key = []( char key ) {
-        return key != '?';
-    };
-    std::vector<char> keys = keys_bound_to( action, restrict_to_printable );
-    auto valid = std::find_if( keys.begin(), keys.end(), is_valid_key );
-    return valid == keys.end() ? -1 : *valid;
+    const std::vector<input_event> keys = keys_bound_to( action,
+                                          maximum_modifier_count,
+                                          restrict_to_printable );
+    if( keys.empty() ) {
+        return cata::nullopt;
+    } else {
+        return keys.front();
+    }
 }
 
 bool can_butcher_at( const tripoint &p )
@@ -638,9 +654,10 @@ bool can_examine_at( const tripoint &p )
     const furn_t &xfurn_t = here.furn( p ).obj();
     const ter_t &xter_t = here.ter( p ).obj();
 
-    if( here.has_furn( p ) && xfurn_t.examine != &iexamine::none ) {
+    if( here.has_furn( p ) && xfurn_t.can_examine() ) {
         return true;
-    } else if( xter_t.examine != &iexamine::none ) {
+    }
+    if( xter_t.can_examine() ) {
         return true;
     }
 
@@ -699,7 +716,7 @@ action_id handle_action_menu()
     const input_context ctxt = get_default_mode_input_context();
     std::string catgname;
 
-#define REGISTER_ACTION( name ) entries.emplace_back( name, true, hotkey_for_action(name), \
+#define REGISTER_ACTION( name ) entries.emplace_back( name, true, hotkey_for_action( name, /*maximum_modifier_count=*/1 ), \
         ctxt.get_action_name( action_ident( name ) ) );
 #define REGISTER_CATEGORY( name )  categories_by_int[last_category] = name; \
     catgname = name; \
@@ -798,14 +815,14 @@ action_id handle_action_menu()
             REGISTER_CATEGORY( _( "Craft" ) );
             REGISTER_CATEGORY( _( "Info" ) );
             REGISTER_CATEGORY( _( "Misc" ) );
-            if( hotkey_for_action( ACTION_QUICKSAVE ) > -1 ) {
+            if( hotkey_for_action( ACTION_QUICKSAVE, /*maximum_modifier_count=*/1 ).has_value() ) {
                 REGISTER_ACTION( ACTION_QUICKSAVE );
             }
             REGISTER_ACTION( ACTION_SAVE );
-            if( hotkey_for_action( ACTION_QUICKLOAD ) > -1 ) {
+            if( hotkey_for_action( ACTION_QUICKLOAD, /*maximum_modifier_count=*/1 ).has_value() ) {
                 REGISTER_ACTION( ACTION_QUICKLOAD );
             }
-            if( hotkey_for_action( ACTION_SUICIDE ) > -1 ) {
+            if( hotkey_for_action( ACTION_SUICIDE, /*maximum_modifier_count=*/1 ).has_value() ) {
                 REGISTER_ACTION( ACTION_SUICIDE );
             }
             REGISTER_ACTION( ACTION_HELP );
@@ -813,11 +830,11 @@ action_id handle_action_menu()
                 // help _is_a menu.
                 entry->txt += "…";
             }
-            if( hotkey_for_action( ACTION_DEBUG ) > -1 ) {
+            if( hotkey_for_action( ACTION_DEBUG, /*maximum_modifier_count=*/1 ).has_value() ) {
                 // register with global key
                 REGISTER_CATEGORY( _( "Debug" ) );
                 if( ( entry = &entries.back() ) ) {
-                    entry->hotkey = hotkey_for_action( ACTION_DEBUG );
+                    entry->hotkey = hotkey_for_action( ACTION_DEBUG, /*maximum_modifier_count=*/1 );
                 }
             }
         } else if( category == _( "Look" ) ) {
@@ -867,7 +884,10 @@ action_id handle_action_menu()
             REGISTER_ACTION( ACTION_DISPLAY_VEHICLE_AI );
             REGISTER_ACTION( ACTION_DISPLAY_VISIBILITY );
             REGISTER_ACTION( ACTION_DISPLAY_LIGHTING );
+            REGISTER_ACTION( ACTION_DISPLAY_TRANSPARENCY );
+            REGISTER_ACTION( ACTION_DISPLAY_REACHABILITY_ZONES );
             REGISTER_ACTION( ACTION_DISPLAY_RADIATION );
+            REGISTER_ACTION( ACTION_DISPLAY_NPC_ATTACK_POTENTIAL );
             REGISTER_ACTION( ACTION_TOGGLE_DEBUG_MODE );
         } else if( category == _( "Interact" ) ) {
             REGISTER_ACTION( ACTION_EXAMINE );
@@ -940,7 +960,7 @@ action_id handle_action_menu()
             std::string msg = _( "Back" );
             msg += "…";
             entries.emplace_back( 2 * NUM_ACTIONS, true,
-                                  hotkey_for_action( ACTION_ACTIONMENU ), msg );
+                                  hotkey_for_action( ACTION_ACTIONMENU, /*maximum_modifier_count=*/1 ), msg );
         }
 
         std::string title = _( "Actions" );
@@ -981,7 +1001,7 @@ action_id handle_main_menu()
     std::vector<uilist_entry> entries;
 
     const auto REGISTER_ACTION = [&]( action_id name ) {
-        entries.emplace_back( name, true, hotkey_for_action( name ),
+        entries.emplace_back( name, true, hotkey_for_action( name, /*maximum_modifier_count=*/1 ),
                               ctxt.get_action_name( action_ident( name ) ) );
     };
 
@@ -1096,8 +1116,7 @@ cata::optional<tripoint> choose_adjacent_highlight( const std::string &message,
     if( !valid.empty() ) {
         hilite_cb = make_shared_fast<game::draw_callback_t>( [&]() {
             for( const tripoint &pos : valid ) {
-                here.drawsq( g->w_terrain, player_character, pos,
-                             true, true, player_character.pos() + player_character.view_offset );
+                here.drawsq( g->w_terrain, pos, drawsq_params().highlight( true ) );
             }
         } );
         g->add_draw_callback( hilite_cb );

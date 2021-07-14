@@ -1,12 +1,14 @@
 #include <algorithm>
-#include <cassert>
 #include <functional>
+#include <iosfwd>
 #include <memory>
+#include <new>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "avatar.h"
+#include "cata_assert.h"
 #include "character.h"
 #include "coordinates.h"
 #include "debug.h"
@@ -24,6 +26,7 @@
 #include "optional.h"
 #include "overmap.h"
 #include "overmapbuffer.h"
+#include "point.h"
 #include "rng.h"
 #include "talker.h"
 #include "translations.h"
@@ -350,7 +353,7 @@ tripoint_abs_omt mission_util::target_om_ter_random( const std::string &omter, i
         return player_character.global_omt_location();
     }
     const overmap *loc_om = overmap_buffer.get_existing_om_global( loc ).om;
-    assert( loc_om );
+    cata_assert( loc_om );
 
     std::vector<tripoint_abs_omt> places_om;
     for( auto &i : places ) {
@@ -526,7 +529,7 @@ bool mission_type::parse_funcs( const JsonObject &jo, std::function<void( missio
      * write that code in two places so here it goes.
      */
     talk_effect_t talk_effects;
-    talk_effects.load_effect( jo );
+    talk_effects.load_effect( jo, "effect" );
     phase_func = [ funcs, talk_effects ]( mission * miss ) {
         ::dialogue d;
         npc *beta = g->find_npc( miss->get_npc_id() );

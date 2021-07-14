@@ -1,17 +1,16 @@
-#include "catch/catch.hpp"
-
+#include <functional>
 #include <cstddef>
 #include <functional>
 #include <list>
 #include <memory>
 #include <set>
 #include <sstream>
-#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "avatar.h"
+#include "cata_catch.h"
 #include "inventory.h"
 #include "item.h"
 #include "pimpl.h"
@@ -51,14 +50,16 @@ static bool try_set_traits( const std::vector<trait_id> &traits )
     avatar &player_character = get_avatar();
     player_character.clear_mutations();
     player_character.add_traits(); // mandatory prof/scen traits
+    std::vector<trait_id> oked_traits;
     for( const trait_id &tr : traits ) {
         if( player_character.has_conflicting_trait( tr ) ||
             !get_scenario()->traitquery( tr ) ) {
             return false;
         } else if( !player_character.has_trait( tr ) ) {
-            player_character.set_mutation( tr );
+            oked_traits.push_back( tr );
         }
     }
+    player_character.set_mutations( oked_traits );
     return true;
 }
 
@@ -103,6 +104,7 @@ TEST_CASE( "starting_items", "[slow]" )
 {
     // Every starting trait that interferes with food/clothing
     const std::vector<trait_id> mutations = {
+        trait_id( "ALBINO" ),
         trait_id( "ANTIFRUIT" ),
         trait_id( "ANTIJUNK" ),
         trait_id( "ANTIWHEAT" ),
@@ -136,9 +138,12 @@ TEST_CASE( "starting_items", "[slow]" )
 
     std::vector<trait_id> traits = next_subset( mutations );
     for( ; !traits.empty(); traits = next_subset( mutations ) ) {
+        CAPTURE( traits );
         for( const auto &pair : scen_prof_combos ) {
             set_scenario( pair.first );
+            INFO( "Scenario = " + pair.first->ident().str() );
             for( const string_id<profession> &prof : pair.second ) {
+                CAPTURE( prof );
                 player_character.prof = &prof.obj();
                 if( !try_set_traits( traits ) ) {
                     continue; // Trait conflict: this prof/scen/trait combo is impossible to attain
@@ -152,7 +157,7 @@ TEST_CASE( "starting_items", "[slow]" )
 
                     player_character.add_profession_items();
                     std::set<const item *> items_visited;
-                    const auto visitable_counter = [&items_visited]( const item * it ) {
+                    const auto visitable_counter = [&items_visited]( const item * it, auto ) {
                         items_visited.emplace( it );
                         return VisitResponse::NEXT;
                     };

@@ -2,20 +2,22 @@
 #ifndef CATA_SRC_OUTPUT_H
 #define CATA_SRC_OUTPUT_H
 
+#include <functional>
+#include <clocale>
 #include <algorithm>
-#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <forward_list>
 #include <functional>
+#include <iosfwd>
 #include <iterator>
-#include <locale>
 #include <map>
 #include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
+#include "cata_assert.h"
 #include "catacharset.h"
 #include "color.h"
 #include "debug.h"
@@ -148,6 +150,8 @@ extern int FULL_SCREEN_WIDTH; // width of "full screen" popups
 extern int FULL_SCREEN_HEIGHT; // height of "full screen" popups
 extern int OVERMAP_WINDOW_WIDTH; // width of overmap window
 extern int OVERMAP_WINDOW_HEIGHT; // height of overmap window
+extern int OVERMAP_WINDOW_TERM_WIDTH; // width of the overmap window in terminal characters
+extern int OVERMAP_WINDOW_TERM_HEIGHT; // same for height
 extern int OVERMAP_LEGEND_WIDTH; // width of overmap window legend
 
 nc_color msgtype_to_color( game_message_type type, bool bOldMsg = false );
@@ -156,7 +160,7 @@ nc_color msgtype_to_color( game_message_type type, bool bOldMsg = false );
  * @anchor color_tags
  * @name color tags
  *
- * Most print function have only one color parameter (or none at all), therefor they would
+ * Most print function have only one color parameter (or none at all), therefore they would
  * print the whole text in one color. To print some parts of a text in a different color,
  * one would have to write separate calls to the print functions.
  *
@@ -228,7 +232,8 @@ std::vector<std::string> foldstring( const std::string &str, int width, char spl
  * @param base_color Base color that is used outside of any color tag.
  **/
 void print_colored_text( const catacurses::window &w, const point &p, nc_color &cur_color,
-                         const nc_color &base_color, const std::string &text );
+                         const nc_color &base_color, const std::string &text,
+                         report_color_error color_error = report_color_error::yes );
 /**
  * Print word wrapped text (with @ref color_tags) into the window.
  *
@@ -274,7 +279,7 @@ inline int fold_and_print( const catacurses::window &w, const point &begin,
 /**
  * Like @ref fold_and_print, but starts the output with the N-th line of the folded string.
  * This can be used for scrolling large texts. Parameters have the same meaning as for
- * @ref fold_and_print, the function therefor handles @ref color_tags correctly.
+ * @ref fold_and_print, the function therefore handles @ref color_tags correctly.
  *
  * @param w Window we are printing in
  * @param begin The (row,column) index on which to start.
@@ -312,14 +317,26 @@ inline int fold_and_print_from( const catacurses::window &w, const point &begin,
  * @param text Actual message to print
  */
 void trim_and_print( const catacurses::window &w, const point &begin, int width,
-                     nc_color base_color, const std::string &text );
+                     const nc_color &base_color, const std::string &text,
+                     report_color_error color_error = report_color_error::yes );
 std::string trim_by_length( const std::string &text, int width );
 template<typename ...Args>
 inline void trim_and_print( const catacurses::window &w, const point &begin,
-                            const int width, const nc_color base_color, const char *const mes, Args &&... args )
+                            const int width, const nc_color &base_color,
+                            const char *const mes, Args &&... args )
 {
-    return trim_and_print( w, begin, width, base_color, string_format( mes,
-                           std::forward<Args>( args )... ) );
+    return trim_and_print( w, begin, width, base_color,
+                           string_format( mes, std::forward<Args>( args )... ) );
+}
+template<typename ...Args>
+inline void trim_and_print( const catacurses::window &w, const point &begin,
+                            const int width, const nc_color &base_color,
+                            const report_color_error color_error,
+                            const char *const mes, Args &&... args )
+{
+    return trim_and_print( w, begin, width, base_color,
+                           string_format( mes, std::forward<Args>( args )... ),
+                           color_error );
 }
 void center_print( const catacurses::window &w, int y, const nc_color &FG,
                    const std::string &text );
@@ -328,6 +345,7 @@ int right_print( const catacurses::window &w, int line, int right_indent,
 void insert_table( const catacurses::window &w, int pad, int line, int columns,
                    const nc_color &FG, const std::string &divider, bool r_align,
                    const std::vector<std::string> &data );
+std::string satiety_bar( int calpereffv );
 void scrollable_text( const std::function<catacurses::window()> &init_window,
                       const std::string &title, const std::string &text );
 std::string name_and_value( const std::string &name, int value, int field_width );
@@ -387,7 +405,7 @@ class border_helper
 
                 friend class border_helper;
             private:
-                border_info( border_helper &helper );
+                explicit border_info( border_helper &helper );
 
                 point pos;
                 point size;
@@ -395,7 +413,7 @@ class border_helper
         };
 
         border_info &add_border();
-        void draw_border( const catacurses::window &win );
+        void draw_border( const catacurses::window &win, nc_color border_color = BORDER_COLOR );
 
         friend class border_info;
     private:
@@ -596,8 +614,6 @@ std::string shortcut_text( nc_color shortcut_color, const std::string &fmt );
  * @param extra_resolution Double the resolution of displayed values with \ symbols.
  * @param colors A vector containing N colors with which to color the bar at different values
  */
-// The last color is used for an empty bar
-// extra_resolution
 std::pair<std::string, nc_color> get_bar( float cur, float max, int width = 5,
         bool extra_resolution = true,
         const std::vector<nc_color> &colors = { c_green, c_light_green, c_yellow, c_light_red, c_red } );
@@ -658,7 +674,8 @@ inline std::string get_labeled_bar( const double val, const int width, const std
 enum class enumeration_conjunction : int {
     none,
     and_,
-    or_
+    or_,
+    arrow
 };
 
 /**
@@ -678,9 +695,20 @@ std::string enumerate_as_string( const _Container &values,
                 return ( values.size() > 2 ? _( ", and " ) : _( " and " ) );
             case enumeration_conjunction::or_:
                 return ( values.size() > 2 ? _( ", or " ) : _( " or " ) );
+            case enumeration_conjunction::arrow:
+                return _( " > " );
         }
         debugmsg( "Unexpected conjunction" );
         return _( ", " );
+    }
+    ();
+    const std::string separator = [&conj]() {
+        switch( conj ) {
+            case enumeration_conjunction::arrow:
+                return _( " > " );
+            default:
+                return _( ", " );
+        }
     }
     ();
     std::string res;
@@ -689,7 +717,7 @@ std::string enumerate_as_string( const _Container &values,
             if( std::next( iter ) == values.end() ) {
                 res += final_separator;
             } else {
-                res += _( ", " );
+                res += separator;
             }
         }
         res += *iter;
@@ -706,7 +734,7 @@ std::string enumerate_as_string( const _Container &values,
  * @param conj Choose how to separate the last elements.
  */
 template<typename _FIter, typename F>
-std::string enumerate_as_string( _FIter first, _FIter last, F string_for,
+std::string enumerate_as_string( _FIter first, _FIter last, F &&string_for,
                                  enumeration_conjunction conj = enumeration_conjunction::and_ )
 {
     std::vector<std::string> values;
@@ -718,6 +746,13 @@ std::string enumerate_as_string( _FIter first, _FIter last, F string_for,
         }
     }
     return enumerate_as_string( values, conj );
+}
+
+template<typename Container, typename F>
+std::string enumerate_as_string( const Container &cont, F &&string_for,
+                                 enumeration_conjunction conj = enumeration_conjunction::and_ )
+{
+    return enumerate_as_string( cont.begin(), cont.end(), std::forward<F>( string_for ), conj );
 }
 
 /**
@@ -773,7 +808,7 @@ void draw_tabs( const catacurses::window &w, const TabList &tab_list,
     [&current_tab]( const typename TabList::value_type & pair ) {
         return pair.first == current_tab;
     } );
-    assert( current_tab_it != tab_list.end() );
+    cata_assert( current_tab_it != tab_list.end() );
     draw_tabs( w, tab_text, std::distance( tab_list.begin(), current_tab_it ) );
 }
 
@@ -788,7 +823,7 @@ void draw_tabs( const catacurses::window &w, const TabList &tab_list, const TabK
     std::vector<typename TabList::value_type> ordered_tab_list;
     for( const auto &key : keys ) {
         auto it = tab_list.find( key );
-        assert( it != tab_list.end() );
+        cata_assert( it != tab_list.end() );
         ordered_tab_list.push_back( *it );
     }
     draw_tabs( w, ordered_tab_list, current_tab );
@@ -847,7 +882,7 @@ class scrollbar
 class scrolling_text_view
 {
     public:
-        scrolling_text_view( catacurses::window &w ) : w_( w ) {}
+        explicit scrolling_text_view( catacurses::window &w ) : w_( w ) {}
 
         void set_text( const std::string & );
         void scroll_up();
@@ -915,7 +950,7 @@ class scrollingcombattext
                 }
                 int getPosX() const;
                 int getPosY() const;
-                direction getDirecton() const {
+                direction getDirection() const {
                     return oDir;
                 }
                 int getInitPosX() const {
